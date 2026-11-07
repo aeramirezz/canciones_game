@@ -116,6 +116,10 @@ details summary{cursor:pointer;font-family:var(--marker);font-size:1.1rem;paddin
 .mark{border-radius:3px;padding:8px 12px;font-size:.9rem;text-align:center}
 .mark.placed{border:3px solid var(--pink);background:var(--pink-soft)}
 .mark.stolen{border:3px solid var(--blue);background:var(--blue-soft)}
+.linkbtn{background:none;border:0;min-height:0;padding:6px;font-family:var(--type);font-size:.85rem;color:var(--muted);text-decoration:underline;box-shadow:none}
+.chip .tok{font-size:.7rem}
+.wait{text-align:center;padding-block:28px}
+.dj{border-color:var(--blue);box-shadow:4px 4px 0 var(--pink)}
 [hidden]{display:none!important}
 @media (prefers-reduced-motion:no-preference){
   .big-card,.result{animation:pop .35s ease-out}
@@ -482,9 +486,17 @@ function deckFor(st){
 function sortCards(c){return c.slice().sort((a,b)=>SONGS[a][2]-SONGS[b][2]||a-b)}
 function fits(cards,k,y){const c=sortCards(cards);const lo=k===0?-Infinity:SONGS[c[k-1]][2], hi=k===c.length?Infinity:SONGS[c[k]][2];return lo<=y&&y<=hi}
 function newGame(){return {code,hostId:myId,status:'lobby',players:[],seats:[],
-  settings:{mode:'solo',teams:2,target:10,steal:true,tokens:true,lang:'all',decades:DEC_FILTERS.map(d=>d[0]),favOnly:false},
+  settings:{dj:null,mode:'solo',teams:2,target:10,steal:true,tokens:true,lang:'all',decades:DEC_FILTERS.map(d=>d[0]),favOnly:false},
   turn:0,deck:[],current:null,phase:'listen',placed:null,steal:null,result:null,winner:null,rev:1}}
 function seatOf(s,pid){const p=s.players.find(x=>x.id===pid);return p?s.seats.find(x=>x.id===p.seat):null}
+function turnDJ(s){
+  // Quien pone la música este turno: el DJ fijo, salvo en el turno de su propio equipo/jugador.
+  const dj=s.settings.dj||s.hostId, active=s.seats[s.turn];
+  const djP=s.players.find(p=>p.id===dj);
+  if(!djP||djP.seat!==active.id) return dj;
+  for(let k=1;k<s.seats.length;k++){const seat=s.seats[(s.turn+k)%s.seats.length];const m=s.players.find(p=>p.seat===seat.id);if(m)return m.id}
+  return dj;
+}
 function drawNext(s){
   if(!s.deck.length){s.status='finished';const max=Math.max(...s.seats.map(x=>x.cards.length));s.winner=s.seats.find(x=>x.cards.length===max).id;s.current=null;return}
   s.current=s.deck.pop();
@@ -501,7 +513,7 @@ function reveal(s){
 }
 function reduce(s,a,from){
   if(a.rev!=null&&a.rev!==s.rev) return null;
-  const isHost=from===s.hostId, n=clone(s), st=n.settings;
+  const isHost=from===s.hostId, n=clone(s), st=n.settings, isDJ=n.status==='playing'&&turnDJ(n)===from, boss=isDJ||isHost;
   const mySeat=n.status==='lobby'?null:seatOf(n,from);
   const active=n.status==='playing'?n.seats[n.turn]:null;
   const isActive=!!(mySeat&&active&&mySeat.id===active.id);
@@ -512,7 +524,7 @@ function reduce(s,a,from){
       if(n.status!=='lobby'||n.players.length>=12)return null;
       n.players.push({id:from,name:a.name,team:n.players.length%st.teams,seat:null});break;
     }
-    case 'kick':if(!isHost||n.status!=='lobby')return null;n.players=n.players.filter(p=>p.id!==a.id);break;
+    case 'kick':if(!isHost||n.status!=='lobby')return null;n.players=n.players.filter(p=>p.id!==a.id);if(st.dj===a.id)st.dj=null;break;
     case 'settings':{
       if(!isHost||n.status!=='lobby')return null;
       const v=a.patch||{};
@@ -523,15 +535,18 @@ function reduce(s,a,from){
       if(typeof v.tokens==='boolean')st.tokens=v.tokens;
       if(['all','es','en'].includes(v.lang))st.lang=v.lang;
       if(typeof v.favOnly==='boolean')st.favOnly=v.favOnly;
+      if(typeof v.dj==='string'&&n.players.some(p=>p.id===v.dj))st.dj=v.dj;
       if(typeof v.decade==='number'){const i=st.decades.indexOf(v.decade);if(i>=0){if(st.decades.length===1)return null;st.decades.splice(i,1)}else st.decades.push(v.decade)}
       break;
     }
     case 'team':{if(n.status!=='lobby'||st.mode!=='teams')return null;const p=n.players.find(x=>x.id===(a.id&&isHost?a.id:from));if(!p||!(a.team>=0&&a.team<st.teams))return null;p.team=a.team;break}
     case 'start':{
       if(!isHost)return null;
+      if(!st.dj||!n.players.some(p=>p.id===st.dj))st.dj=n.hostId;
+      const playing=n.players; n.players.forEach(p=>p.seat=null);
       if(st.mode==='teams'){
-        n.seats=[];for(let t=0;t<st.teams;t++){const m=n.players.filter(p=>p.team===t);if(m.length){const id='t'+t;n.seats.push({id,name:TEAM_NAMES[t],color:TEAM_COLORS[t],cards:[],tokens:st.tokens?START_TOKENS:0});m.forEach(p=>p.seat=id)}}
-      }else{n.seats=n.players.map(p=>{p.seat='p'+p.id;return {id:'p'+p.id,name:p.name,color:null,cards:[],tokens:st.tokens?START_TOKENS:0}})}
+        n.seats=[];for(let t=0;t<st.teams;t++){const m=playing.filter(p=>p.team===t);if(m.length){const id='t'+t;n.seats.push({id,name:TEAM_NAMES[t],color:TEAM_COLORS[t],cards:[],tokens:st.tokens?START_TOKENS:0});m.forEach(p=>p.seat=id)}}
+      }else{n.seats=playing.map(p=>{p.seat='p'+p.id;return {id:'p'+p.id,name:p.name,color:null,cards:[],tokens:st.tokens?START_TOKENS:0}})}
       if(n.seats.length<2)return null;
       const deck=deckFor(st); if(deck.length<n.seats.length*(st.target+2))return null;
       n.deck=shuffle(deck); n.seats.forEach(x=>x.cards=[n.deck.pop()]); shuffle(n.seats);
@@ -539,23 +554,24 @@ function reduce(s,a,from){
     }
     case 'place':{
       if(n.status!=='playing'||n.phase!=='listen')return null;
-      if(!isActive&&!isHost)return null;
+      if(!isActive&&!boss)return null;
       const k=a.slot;if(!(k>=0&&k<=active.cards.length))return null;
       n.placed=k;n.steal=null;
-      const thieves=st.steal&&n.seats.some(x=>x.id!==active.id&&(!st.tokens||x.tokens>=1));
+      const tdj=turnDJ(n);const thieves=st.steal&&n.seats.some(x=>x.id!==active.id&&(!st.tokens||x.tokens>=1)&&n.players.some(p=>p.seat===x.id&&p.id!==tdj));
       if(thieves)n.phase='steal';else reveal(n);
       break;
     }
     case 'steal':{
       if(n.status!=='playing'||n.phase!=='steal'||n.steal)return null;
-      if(!mySeat||isActive)return null;
+      if(!mySeat||isActive||isDJ)return null;
       if(st.tokens&&mySeat.tokens<1)return null;
       const k=a.slot;if(!(k>=0&&k<=active.cards.length)||k===n.placed)return null;
       if(st.tokens)mySeat.tokens--;
       n.steal={seatId:mySeat.id,slot:k,by:from};break;
     }
-    case 'reveal':{if(n.status!=='playing'||n.phase!=='steal')return null;if(!isActive&&!isHost&&!(n.steal&&n.steal.by===from))return null;reveal(n);break}
+    case 'reveal':{if(n.status!=='playing'||n.phase!=='steal')return null;if(!boss&&!isActive)return null;reveal(n);break}
     case 'bonus':{
+      if(!boss)return null;
       if(n.phase!=='reveal'||!n.result||n.result.bonus||!st.tokens)return null;
       const seat=n.seats.find(x=>x.id===n.result.seatId);if(!seat)return null;
       if(seat.tokens<MAX_TOKENS)seat.tokens++;n.result.bonus=true;break;
@@ -566,8 +582,8 @@ function reduce(s,a,from){
       active.tokens-=BUY_COST;giveCard(n,active,n.current);
       n.result={correct:true,bought:true,seatId:active.id,song:n.current,steal:null,stoleBy:null,bonus:true};n.phase='reveal';break;
     }
-    case 'next':if(n.status!=='playing'||n.phase!=='reveal')return null;n.turn=(n.turn+1)%n.seats.length;n.phase='listen';n.placed=null;n.steal=null;n.result=null;drawNext(n);break;
-    case 'skip':if(n.status!=='playing'||n.phase!=='listen')return null;drawNext(n);break;
+    case 'next':if(!boss)return null;if(n.status!=='playing'||n.phase!=='reveal')return null;n.turn=(n.turn+1)%n.seats.length;n.phase='listen';n.placed=null;n.steal=null;n.result=null;drawNext(n);break;
+    case 'skip':if(!isDJ&&!isHost)return null;if(n.status!=='playing'||n.phase!=='listen')return null;drawNext(n);break;
     case 'rematch':if(!isHost)return null;n.status='lobby';n.seats=[];n.players.forEach(p=>p.seat=null);n.result=null;n.winner=null;n.deck=[];n.current=null;n.placed=null;n.steal=null;break;
     default:return null;
   }
@@ -676,159 +692,142 @@ function statusHtml(){
   const lbl={connecting:'Conectando…',online:'Sala '+code,lost:'Reconectando…',idle:''}[net];
   return `<span class="status"><span class="dot ${net==='online'?'on':net==='lost'?'off':''}"></span>${esc(lbl)}</span>`;
 }
-function tokensHtml(n){return state.settings.tokens?`<span class="tok" title="Fichas">${'●'.repeat(n)}${'○'.repeat(Math.max(0,MAX_TOKENS-n))}</span>`:''}
-function seatLabel(seat){
-  if(state.settings.mode!=='teams')return esc(seat.name);
-  const m=state.players.filter(p=>p.seat===seat.id).map(p=>esc(p.name)).join(', ');
-  return `${esc(seat.name)} <span class="small muted">(${m})</span>`;
-}
+function nameOf(pid){const p=state.players.find(x=>x.id===pid);return p?esc(p.name):'—'}
 function scoreboard(){
-  return `<div class="score">${state.seats.map((x,i)=>{const mine=seatOf(state,myId);return `<div class="srow ${state.status==='playing'&&i===state.turn?'on':''} ${mine&&mine.id===x.id?'me':''}">${x.color?`<span class="sw" style="background:${x.color}"></span>`:''}<span class="sn">${seatLabel(x)}${mine&&mine.id===x.id?' · tú':''}</span>${tokensHtml(x.tokens)}<span class="n">${x.cards.length}/${state.settings.target}</span></div>`}).join('')}</div>`;
+  const st=state.settings, mine=seatOf(state,myId);
+  return `<div class="chips">${state.seats.map((x,i)=>`<span class="chip ${state.status==='playing'&&i===state.turn?'on':''} ${mine&&mine.id===x.id?'me':''}">${x.color?`<span class="sw" style="background:${x.color}"></span>`:''}${esc(x.name)} <span class="n">${x.cards.length}</span>${st.tokens?`<span class="tok">${'●'.repeat(x.tokens)}</span>`:''}</span>`).join('')}</div>`;
 }
 function legend(){return `<div class="legend">${Object.keys(DECADES).map(d=>`<span style="background:${DECADES[d][0]}">${String(d).slice(2)}s</span>`).join('')}</div>`}
+function placedText(seat){const c=sortCards(seat.cards);return slotLabel(c,state.placed).replace(/^Entre/,'entre').replace(/^Antes/,'antes').replace(/^Después/,'después')}
 
 function vHome(){
   const resume=lsGet('aa.hostState');
   return `
   <div class="panel">
     <h2>¿En qué año sonó esta canción?</h2>
-    <p class="muted">Suena una canción y quien tiene el turno la coloca en su línea de tiempo, sin ver el título. Si el año cae en el lugar correcto, se queda la carta. Los demás pueden intentar robársela.</p>
+    <p class="muted">Escucha, ordénala en tu línea de tiempo y quédate con la carta si aciertas. Gana quien junte más rápido.</p>
     ${legend()}
   </div>
   <div class="panel">
     <label class="eyebrow" for="name">tu nombre</label>
     <input id="name" maxlength="20" autocomplete="nickname" placeholder="Cómo te verán los demás" value="${esc(myName)}">
+    <input id="joincode" class="code-input" maxlength="4" autocomplete="off" autocapitalize="characters" placeholder="CÓDIGO" value="${esc(ui.joinCode)}" aria-label="Código de sala">
+    <button class="btn-primary" data-act="join">Entrar a la sala</button>
   </div>
-  <div class="panel">
-    <span class="eyebrow">unirme a una sala</span>
-    <input id="joincode" class="code-input" maxlength="4" autocomplete="off" autocapitalize="characters" placeholder="ABCD" value="${esc(ui.joinCode)}" aria-label="Código de sala">
-    <button class="btn-primary" data-act="join">Entrar</button>
-  </div>
-  <div class="panel">
-    <span class="eyebrow">o sé el anfitrión</span>
-    <p class="muted small">Tu teléfono crea la sala y la mantiene. Déjalo con la página abierta durante la partida.</p>
-    <button class="btn-ghost" data-act="create">Crear sala nueva</button>
-    ${resume?`<button class="btn-ghost" data-act="resume">Retomar mi última sala</button>`:''}
+  <div class="row" style="justify-content:center">
+    <button class="btn-ghost btn-small" data-act="create">Crear sala nueva</button>
+    ${resume?`<button class="btn-ghost btn-small" data-act="resume">Retomar mi sala</button>`:''}
   </div>`;
 }
 function seg(name,opts,cur,host){return `<div class="seg">${opts.map(([v,l])=>`<button class="${cur===v?'on':''}" ${host?`data-act="set" data-k="${name}" data-v="${v}"`:'disabled'}>${l}</button>`).join('')}</div>`}
 function toggle(name,on,label,host){return `<button class="tgl ${on?'on':''}" ${host?`data-act="set" data-k="${name}" data-v="${!on}"`:'disabled'}><span class="box">${on?'✓':''}</span>${label}</button>`}
 function vLobby(){
   const s=state, st=s.settings, host=role==='host', teams=st.mode==='teams';
-  const deckN=deckFor(st).length;
-  const me=s.players.find(p=>p.id===myId);
+  const deckN=deckFor(st).length, dj=st.dj||s.hostId, me=s.players.find(p=>p.id===myId);
   const playersHtml=teams
     ?`<div class="teams">${Array.from({length:st.teams},(_,t)=>`<div class="team" style="border-color:${TEAM_COLORS[t]}"><div class="tname"><span class="sw" style="background:${TEAM_COLORS[t]}"></span>${TEAM_NAMES[t]}</div><div class="chips">${s.players.filter(p=>p.team===t).map(p=>`<span class="chip ${p.id===myId?'me':''}">${esc(p.name)}</span>`).join('')||'<span class="muted small">vacío</span>'}</div>${me&&me.team!==t?`<button class="btn-ghost btn-small" data-act="team" data-t="${t}">Unirme</button>`:''}</div>`).join('')}</div>`
-    :`<div class="chips">${s.players.map(p=>`<span class="chip ${p.id===myId?'me':''}">${esc(p.name)}${p.id===s.hostId?' ★':''}${host&&p.id!==myId?` <button class="x" data-act="kick" data-id="${p.id}" aria-label="Quitar">×</button>`:''}</span>`).join('')}</div>`;
+    :`<div class="chips">${s.players.map(p=>`<span class="chip ${p.id===myId?'me':''}">${esc(p.name)}${host&&p.id!==myId?` <button class="x" data-act="kick" data-id="${p.id}" aria-label="Quitar">×</button>`:''}</span>`).join('')}</div>`;
   return `
   <div class="panel" style="text-align:center">
-    <span class="eyebrow">código de la sala</span>
     <div class="code">${esc(code)}</div>
     <button class="btn-primary" data-act="share">Invitar amigos</button>
-    <p class="muted small">Tus amigos abren el enlace o entran a la página y escriben el código.</p>
   </div>
   <div class="panel">
     <span class="eyebrow">jugadores · ${s.players.length}</span>
     ${playersHtml}
   </div>
   <div class="panel">
-    <span class="eyebrow">reglas${host?'':' · las elige el anfitrión'}</span>
-    <div class="opt"><span>Cómo juegan</span>${seg('mode',[['solo','Cada uno'],['teams','Equipos']],st.mode,host)}</div>
+    <span class="eyebrow">¿quién pone la música?</span>
+    <div class="chips">${s.players.map(p=>`<button class="dchip ${p.id===dj?'on':''}" ${host?`data-act="set" data-k="dj" data-v="${p.id}"`:'disabled'}>${esc(p.name)}</button>`).join('')}</div>
+    <p class="muted small">El DJ también juega. En su propio turno pone la canción el siguiente jugador.</p>
+  </div>
+  <details class="panel"><summary>Más opciones</summary><div class="stack" style="margin-top:8px">
+    <div class="opt"><span>Juegan</span>${seg('mode',[['solo','Cada uno'],['teams','Equipos']],st.mode,host)}</div>
     ${teams?`<div class="opt"><span>Equipos</span>${seg('teams',[[2,'2'],[3,'3'],[4,'4']],st.teams,host)}</div>`:''}
     <div class="opt"><span>Cartas para ganar</span>${seg('target',TARGETS.map(n=>[n,String(n)]),st.target,host)}</div>
-    ${toggle('steal',st.steal,'Se pueden robar cartas',host)}
-    ${toggle('tokens',st.tokens,'Fichas (empiezan con 2)',host)}
-  </div>
-  <div class="panel">
-    <span class="eyebrow">mazo · ${deckN} canciones</span>
+    ${toggle('steal',st.steal,'Robar cartas',host)}
+    ${toggle('tokens',st.tokens,'Fichas',host)}
     <div class="opt"><span>Idioma</span>${seg('lang',[['all','Todas'],['es','Español'],['en','Inglés']],st.lang,host)}</div>
-    <div class="opt col"><span>Décadas</span><div class="chips">${DEC_FILTERS.map(([d,l])=>`<button class="dchip ${st.decades.includes(d)?'on':''}" ${host?`data-act="set" data-k="decade" data-v="${d}"`:'disabled'}>${l}</button>`).join('')}</div></div>
+    <div class="chips">${DEC_FILTERS.map(([d,l])=>`<button class="dchip ${st.decades.includes(d)?'on':''}" ${host?`data-act="set" data-k="decade" data-v="${d}"`:'disabled'}>${l}</button>`).join('')}</div>
     ${toggle('favOnly',st.favOnly,'Solo nuestros artistas',host)}
-    ${deckN<30?'<p class="note">Con estos filtros quedan pocas canciones. Abre más opciones.</p>':''}
-  </div>
-  ${host?`<button class="btn-primary" data-act="start" ${s.players.length<2?'disabled':''}>${s.players.length<2?'Esperando jugadores…':'Empezar partida'}</button>`:'<p class="muted" style="text-align:center">Esperando a que el anfitrión empiece…</p>'}
+    <p class="muted small">${deckN} canciones en el mazo.</p>
+  </div></details>
   ${rulesBox()}
+  ${host?`<button class="btn-primary" data-act="start" ${s.players.length<2?'disabled':''}>${s.players.length<2?'Esperando jugadores…':'Empezar'}</button>`:'<p class="muted" style="text-align:center">Esperando a que empiece la partida…</p>'}
   ${leaveBox()}`;
 }
 function rulesBox(){
   const st=state.settings;
-  return `<details class="panel"><summary>Cómo se juega</summary><div class="stack small">
-    <p>1. En tu turno, alguien pone la canción en Spotify. Tú no ves el título: escuchas y eliges en qué lugar de tu línea va.</p>
-    <p>2. Si el año cae entre las cartas que elegiste, te la quedas. Si es el mismo año que una vecina, también vale.</p>
-    ${st.steal?`<p>3. Antes de revelar, los demás ven dónde la pusiste. Si creen que va en otro lugar, pueden robar${st.tokens?' (cuesta 1 ficha)':''}: el primero que marque otro hueco se la queda si acierta y tú fallas.</p>`:''}
-    ${st.tokens?`<p>Fichas: si dices el título y el artista antes de revelar, ganas una ficha. Con ${BUY_COST} fichas puedes comprar la carta sin adivinar. Máximo ${MAX_TOKENS}.</p>`:''}
+  return `<details class="panel"><summary>Cómo se juega</summary><div class="stack small" style="margin-top:8px">
+    <p>El DJ pone la canción. Quien tiene el turno la escucha y elige en qué lugar de su línea va. Si el año calza, se queda la carta.</p>
+    ${st.steal?`<p>Antes de revelar, los demás ven dónde la puso. Si creen que va en otro lugar, pueden robar${st.tokens?' por 1 ficha':''}: si el jugador falla y el que robó acierta, la carta es suya.</p>`:''}
+    ${st.tokens?`<p>Si dices título y artista, el DJ te da +1 ficha. Con ${BUY_COST} fichas compras una carta sin adivinar.</p>`:''}
     <p>Gana quien llegue primero a ${st.target} cartas.</p></div></details>`;
 }
+function myLine(mySeat){return mySeat?`<details class="panel"><summary>${state.settings.mode==='teams'?'Línea de tu equipo':'Tu línea'} · ${mySeat.cards.length}</summary><div style="margin-top:8px">${timelineHtml(mySeat)}</div></details>`:''}
+function stealPicker(act_,who){
+  const cards=sortCards(act_.cards), s=state;
+  const cell=k=>k===s.placed?`<div class="mark placed">${who} la puso aquí</div>`:(ui.slot===k?`<button class="ghost-card" data-act="slot" data-k="${k}" style="width:100%"><span class="yr">?</span><span>Aquí la robo</span></button>`:`<button class="slot" data-act="slot" data-k="${k}">${slotLabel(cards,k)}</button>`);
+  return `<div class="panel"><h2>¿Dónde crees que va?</h2><div class="timeline">${cards.map((c,k)=>cell(k)+cardHtml(c)).join('')}${cell(cards.length)}</div>
+    <button class="btn-primary" data-act="steal" ${ui.slot===null?'disabled':''}>¡Robo!</button>
+    <button class="btn-ghost btn-small" data-act="unsteal">Mejor no</button></div>`;
+}
 function vPlaying(){
-  const s=state, st=s.settings, act_=s.seats[s.turn], mySeat=seatOf(s,myId), mine=!!(mySeat&&mySeat.id===act_.id), host=role==='host';
-  const who=st.mode==='teams'?esc(act_.name):esc(act_.name);
+  const s=state, st=s.settings, act_=s.seats[s.turn], mySeat=seatOf(s,myId);
+  const mine=!!(mySeat&&mySeat.id===act_.id), tdj=turnDJ(s), iDJ=tdj===myId;
+  const who=esc(act_.name);
   let main='';
   if(s.phase==='listen'){
-    if(mine){
+    if(iDJ){
+      main=`<div class="panel dj">
+        <span class="eyebrow">eres el DJ · turno de ${who}</span>
+        <a class="btn btn-spotify" href="${spotifyUrl(s.current)}" target="_blank" rel="noopener">Poner la canción</a>
+        <p class="muted small">Ponla en Spotify sin mostrar la pantalla. ${who} la va a colocar en su línea.</p>
+        <button class="btn-ghost btn-small" data-act="skip">No suena o no sirve: otra canción</button>
+      </div>`;
+    }else if(mine){
       main=`<div class="panel">
-        <div class="mystery"><div class="lab"><b>${st.mode==='teams'?'le toca a tu equipo':'te toca a ti'}</b><span class="small">lado A · 60 min</span></div><div class="reels"><span class="reel"></span><span class="q">?</span><span class="reel"></span></div><p class="hint">Alguien está poniendo la canción. Escuchen y elijan dónde va.</p></div>
-        <h2>¿Dónde va en tu línea?</h2>
+        <div class="mystery"><div class="lab"><b>${st.mode==='teams'?'le toca a tu equipo':'te toca'}</b><span class="small">DJ: ${nameOf(tdj)}</span></div><div class="reels"><span class="reel"></span><span class="q">?</span><span class="reel"></span></div><p class="hint">Escucha y elige dónde va.</p></div>
         ${timelineHtml(act_,{slots:true})}
         <button class="btn-primary" data-act="place" ${ui.slot===null?'disabled':''}>${ui.slot===null?'Toca un hueco':'La pongo aquí'}</button>
-        ${st.tokens?`<button class="btn-ghost btn-small" data-act="buy" ${act_.tokens<BUY_COST?'disabled':''}>Comprar la carta (${BUY_COST} fichas)</button>`:''}
+        ${st.tokens&&act_.tokens>=BUY_COST?`<button class="btn-ghost btn-small" data-act="buy">Comprar la carta (${BUY_COST} fichas)</button>`:''}
       </div>`;
     }else{
-      const dj=s.seats[(s.turn+1)%s.seats.length];
-      main=`<div class="panel">
-        <span class="eyebrow">turno de ${who}</span>
-        <h2>${mySeat&&dj.id===mySeat.id?'Te toca poner la canción':`Pone la canción: ${esc(dj.name)}`}</h2>
-        <a class="btn btn-spotify" href="${spotifyUrl(s.current)}" target="_blank" rel="noopener">Abrir en Spotify</a>
-        ${ui.showTitle?`<div class="reveal-title"><strong>${esc(SONGS[s.current][0])}</strong><span class="muted">${esc(SONGS[s.current][1])}</span></div>`:''}
-        <div class="row"><button class="btn-ghost btn-small" data-act="title">${ui.showTitle?'Ocultar título':'Ver título'}</button><button class="btn-ghost btn-small" data-act="skip">Saltar canción</button></div>
-        <p class="muted small">Que ${who} no vea tu pantalla.</p>
-      </div>
-      ${host?`<details class="panel"><summary>Colocar por ${who} (si se desconectó)</summary>${timelineHtml(act_,{slots:true})}<button class="btn-primary" data-act="place" ${ui.slot===null?'disabled':''}>Confirmar por ${who}</button></details>`:''}
-      ${mySeat?`<div class="panel"><span class="eyebrow">tu línea · ${mySeat.cards.length}/${st.target}</span>${timelineHtml(mySeat)}</div>`:''}`;
+      main=`<div class="panel wait"><span class="eyebrow">turno de ${who}</span><h2>Escuchen…</h2><p class="muted small">${nameOf(tdj)} pone la canción.</p></div>`;
     }
   }else if(s.phase==='steal'){
-    const placedMark={[s.placed]:{cls:'placed',text:`${who} la puso aquí`}};
-    if(s.steal){placedMark[s.steal.slot]={cls:'stolen',text:`${esc((s.seats.find(x=>x.id===s.steal.seatId)||{}).name||'')} dice que va aquí`}}
-    const canSteal=mySeat&&!mine&&!s.steal&&(!st.tokens||mySeat.tokens>=1);
-    const canReveal=mine||host||(s.steal&&s.steal.by===myId);
-    if(ui.stealing&&canSteal){
-      const cards=sortCards(act_.cards);
+    const where=placedText(act_);
+    const thief=s.steal?s.seats.find(x=>x.id===s.steal.seatId):null;
+    const canSteal=mySeat&&!mine&&!iDJ&&!s.steal&&(!st.tokens||mySeat.tokens>=1);
+    if(ui.stealing&&canSteal) main=stealPicker(act_,who);
+    else{
+      const marks={[s.placed]:{cls:'placed',text:`${who} la puso aquí`}};
+      if(s.steal)marks[s.steal.slot]={cls:'stolen',text:`${esc(thief?thief.name:'')} dice que va aquí`};
       main=`<div class="panel">
-        <span class="eyebrow">robar${st.tokens?' · cuesta 1 ficha':''}</span>
-        <h2>¿Dónde crees que va?</h2>
-        <div class="timeline">${cards.map((c,k)=>(k===s.placed?`<div class="mark placed">${who} la puso aquí</div>`:(ui.slot===k?`<button class="ghost-card" data-act="slot" data-k="${k}" style="width:100%"><span class="yr">?</span><span>Aquí la robo</span></button>`:`<button class="slot" data-act="slot" data-k="${k}">${slotLabel(cards,k)}</button>`))+cardHtml(c)).join('')}${cards.length===s.placed?`<div class="mark placed">${who} la puso aquí</div>`:(ui.slot===cards.length?`<button class="ghost-card" data-act="slot" data-k="${cards.length}" style="width:100%"><span class="yr">?</span><span>Aquí la robo</span></button>`:`<button class="slot" data-act="slot" data-k="${cards.length}">${slotLabel(cards,cards.length)}</button>`)}</div>
-        <button class="btn-primary" data-act="steal" ${ui.slot===null?'disabled':''}>¡Robo!</button>
-        <button class="btn-ghost btn-small" data-act="unsteal">Mejor no</button>
-      </div>`;
-    }else{
-      main=`<div class="panel">
-        <span class="eyebrow">antes de revelar</span>
-        <h2>${s.steal?'¡Intentaron robar!':mine?'¿Alguien te la quiere robar?':`${who} ya la colocó`}</h2>
-        ${timelineHtml(act_,{marks:placedMark})}
-        ${canSteal?`<button class="btn-primary" data-act="stealmode">Robar${st.tokens?' (1 ficha)':''}</button>`:''}
-        ${canReveal?`<button class="${canSteal?'btn-ghost':'btn-primary'}" data-act="reveal">Revelar el año</button>`:'<p class="muted small" style="text-align:center">Esperando a que revelen…</p>'}
-        ${!s.steal&&!mine?'<p class="muted small">Si nadie quiere robar, revelen.</p>':''}
+        <span class="eyebrow">${mine?'tu respuesta':`${who} respondió`}</span>
+        <h2>${mine?`La pusiste ${where}`:`La puso ${where}`}</h2>
+        ${thief?`<p><b>${esc(thief.name)}</b> intentó robarla.</p>`:''}
+        ${canSteal?`<button class="btn-ghost" data-act="stealmode">No creo, la robo${st.tokens?' (1 ficha)':''}</button>`:''}
+        ${iDJ||role==='host'&&!mine?`<button class="btn-primary" data-act="reveal">Revelar el año</button>`:`<p class="muted small" style="text-align:center">El DJ revela en un momento…</p>`}
+        <details><summary class="small">Ver la línea</summary><div style="margin-top:8px">${timelineHtml(act_,{marks})}</div></details>
       </div>`;
     }
   }else{
     const r=s.result, rs=s.seats.find(x=>x.id===r.seatId)||act_, thief=r.stoleBy?s.seats.find(x=>x.id===r.stoleBy):null;
-    const rsName=mySeat&&mySeat.id===rs.id?(st.mode==='teams'?'Tu equipo':'Tú'):esc(rs.name);
     let head,cls,line;
-    if(r.bought){head='Carta comprada';cls='ok';line=`${rsName} usó ${BUY_COST} fichas.`}
-    else if(r.correct){head='¡Correcto!';cls='ok';line=`${rsName} se queda la carta.`}
-    else if(thief){head='¡Robada!';cls='bad';line=`${esc(thief.name)} se lleva la carta.`}
-    else{head='No era ahí';cls='bad';line=r.steal?'Nadie acertó. La carta se descarta.':'La carta se descarta.'}
-    const owner=r.correct||r.bought?rs:thief;
+    if(r.bought){head='Comprada';cls='ok';line=`${esc(rs.name)} usó ${BUY_COST} fichas.`}
+    else if(r.correct){head='¡Correcto!';cls='ok';line=`${esc(rs.name)} se queda la carta.`}
+    else if(thief){head='¡Robada!';cls='bad';line=`${esc(thief.name)} se la lleva.`}
+    else{head='No era ahí';cls='bad';line='La carta se descarta.'}
     main=`<div class="panel">
       <div class="result ${cls}">${head}</div>
       ${bigCard(r.song)}
       <p style="text-align:center">${line}</p>
-      ${st.tokens&&!r.bought?(r.bonus?`<p class="muted small" style="text-align:center">+1 ficha por adivinar título y artista</p>`:`<button class="btn-ghost btn-small" data-act="bonus">${rsName} dijo título y artista: +1 ficha</button>`):''}
-      <button class="btn-primary" data-act="next">Siguiente turno</button>
-      <a class="btn btn-ghost" href="${spotifyUrl(r.song)}" target="_blank" rel="noopener">Escucharla otra vez</a>
-    </div>
-    ${owner?`<div class="panel"><span class="eyebrow">línea de ${esc(owner.name)}</span>${timelineHtml(owner,{highlight:r.song})}</div>`:''}`;
+      ${iDJ&&st.tokens&&!r.bought?(r.bonus?`<p class="muted small" style="text-align:center">+1 ficha para ${esc(rs.name)}</p>`:`<button class="btn-ghost btn-small" data-act="bonus">${esc(rs.name)} dijo título y artista: +1 ficha</button>`):''}
+      ${iDJ||role==='host'?`<button class="btn-primary" data-act="next">Siguiente turno</button>`:'<p class="muted small" style="text-align:center">El DJ pasa al siguiente turno.</p>'}
+    </div>`;
   }
-  return `${scoreboard()}${main}${allLines()}${rulesBox()}${leaveBox()}`;
+  return `${scoreboard()}${main}${s.phase==='listen'&&mine?'':myLine(mySeat)}${leaveBox()}`;
 }
 function vFinished(){
   const w=state.seats.find(x=>x.id===state.winner), mySeat=seatOf(state,myId);
@@ -837,19 +836,19 @@ function vFinished(){
     <h2 style="font-size:2.6rem">${w&&mySeat&&w.id===mySeat.id?'¡Ganaste!':'Gana '+esc(w?w.name:'—')}</h2>
     ${state.result?bigCard(state.result.song):'<p class="muted">Se acabó el mazo.</p>'}
     ${role==='host'?`<button class="btn-primary" data-act="rematch">Revancha</button>`:'<p class="muted">El anfitrión puede empezar la revancha.</p>'}
-  </div>${scoreboard()}${allLines(true)}${leaveBox()}`;
+  </div>${scoreboard()}${allLines()}${leaveBox()}`;
 }
-function allLines(open=false){
-  return `<details class="panel" ${open?'open':''}><summary>Ver las líneas de todos</summary>${state.seats.map(x=>`<div class="stack" style="margin-top:10px"><span class="eyebrow">${esc(x.name)} · ${x.cards.length}</span>${x.cards.length?timelineHtml(x):'<span class="muted small">Sin cartas</span>'}</div>`).join('')}</details>`;
+function allLines(){
+  return `<details class="panel"><summary>Ver las líneas de todos</summary>${state.seats.map(x=>`<div class="stack" style="margin-top:10px"><span class="eyebrow">${esc(x.name)} · ${x.cards.length}</span>${timelineHtml(x)}</div>`).join('')}</details>`;
 }
 function leaveBox(){
   const warn=role==='host'?'Si sales, la sala se cierra para todos.':'Puedes volver a entrar con el mismo código.';
   return ui.confirmLeave
     ?`<div class="panel"><p>${warn}</p><div class="row"><button class="btn-danger btn-small" data-act="leave-yes">Salir</button><button class="btn-ghost btn-small" data-act="leave-no">Cancelar</button></div></div>`
-    :`<div><button class="btn-ghost btn-small" data-act="leave">Salir de la sala</button></div>`;
+    :`<div style="text-align:center"><button class="linkbtn" data-act="leave">salir de la sala</button></div>`;
 }
 function vWaiting(){
-  return `<div class="panel"><span class="eyebrow">sala ${esc(code)}</span><h2>${net==='lost'?'Buscando la sala…':'Conectando…'}</h2><p class="muted">Asegúrate de que el anfitrión tenga la página abierta. Si tarda mucho, prueben todos con el mismo wifi.</p></div>${leaveBox()}`;
+  return `<div class="panel"><span class="eyebrow">sala ${esc(code)}</span><h2>${net==='lost'?'Buscando la sala…':'Conectando…'}</h2><p class="muted">Asegúrate de que el anfitrión tenga la página abierta. Si tarda, prueben con el mismo wifi.</p></div>${leaveBox()}`;
 }
 function render(){
   const app=document.getElementById('app');
